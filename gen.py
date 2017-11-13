@@ -37,7 +37,6 @@ except ImportError:
 		userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_3) ' \
 			'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36'
 	config = ConfigClass 
-
 def doRequest(url):
 	global dataMeter
 	global goodRequests
@@ -50,7 +49,6 @@ def doRequest(url):
 	headers = {'user-agent': config.userAgent}
 	
 	try:
-	except:
 		r = requests.get(url, headers=headers, timeout=15)
 	except requests.exceptions.RequestException as e:
 		logging.getLogger("http").error('HTTPError[%s] to [%s]'%(str(e), url))
@@ -104,11 +102,43 @@ test_str3 = '<a href=" https://www.ebay.com/rpp/gift-cards" _sp="m570.l6463" cla
 
 
 def test_geturl_re():
-	getLinks(test_str)
-	getLinks(test_str2)
-	getLinks(test_str3)
+	getLinks('abc.com', test_str)
+	getLinks('abc.com', test_str2)
+	getLinks('abc.com', test_str3)
+	
+def remedyUrl(url, newUrl):
+	#print("bef:"+newUrl)
+	if newUrl.startswith('//'):
+		hbeg = url.find('//')
+		if  hbeg == -1:
+			logging.getLogger("http").error('getLinksRe cannot find // in page[%s] with new ULR [%s]' % (url, newUrl))
+			return ''
+		newUrl = url[0:hbeg]+newUrl
+	elif newUrl.startswith('/'):
+		hbeg = url.find('//')
+		if  hbeg == -1:
+			logging.getLogger("http").error('getLinksRe cannot find // in page[%s] with new ULR [%s]' % (url, newUrl))
+			return ''
+		pbeg = url.find('/', hbeg+2)
+		if  pbeg == -1:
+			newUrl = url + newUrl
+		else :
+			newUrl = url[0:pbeg]+newUrl
+	elif newUrl.startswith('?'):
+		newUrl = url + newUrl
+	#print("aft:"+newUrl)
+	return newUrl
+	
+def testRemedyUrl():
+	assert(remedyUrl("http://abc.com", "//cdf.com/a?b") == "http://cdf.com/a?b")
+	assert(remedyUrl("https://abc.com", "//cdf.com/a?b") == "https://cdf.com/a?b")
+	assert(remedyUrl("https://abc.com", "/cdf.com/a?b") == "https://abc.com/cdf.com/a?b")
+	assert(remedyUrl("https://abc.com/", "/cdf.com/a?b") == "https://abc.com/cdf.com/a?b")
+	assert(remedyUrl("https://abc.com/a.html", "?cdf/a?b") == "https://abc.com/a.html?cdf/a?b")
+	assert(remedyUrl("https://abc.com", "http://cdf.com/a?b") == "http://cdf.com/a?b")
+
 from HTMLParser import HTMLParser
-def getLinksRe(page_content):
+def getLinksRe(url, page_content):
 	links1=set()
 	links2=set()
 
@@ -121,14 +151,22 @@ def getLinksRe(page_content):
 		if any(bl in match for bl in config.blacklist):
 			pass
 		else:
-			h = HTMLParser()
-			match = h.unescape(match)
+			try:
+				h = HTMLParser()
+				match = h.unescape(match)
+			except:
+				import traceback
+				logging.getLogger("http").error('Http 2[%s] generic exception: %s'%(url, traceback.format_exc()))
+				continue
 
 			#print("URL1:%s"%str(match))
+			match = remedyUrl(url, match)
+			if match == '':
+				continue
 			links1.add(match)
 	return links1
 	
-def getLinksBS(page_content):
+def getLinksBS(url, page_content):
 	links2=set()
 
 	for link in BeautifulSoup(page_content).findAll('a', href=True): #, parseOnlyThese=SoupStrainer('a')):
@@ -139,16 +177,16 @@ def getLinksBS(page_content):
 		links2.add(link.get('href'))
 	return links2
 import datetime
-def getLinks(page_content):
-	return getLinksRe(page_content)
-def getLinksTestDiff(page_content):
+def getLinks(url, page_content):
+	return getLinksRe(url, page_content)
+def getLinksTestDiff(url, page_content):
 	begtime = datetime.datetime.now()
-	links1 = getLinksRe(page_content)
+	links1 = getLinksRe(url, page_content)
 	endtime = datetime.datetime.now()
 	print("Re use time: %s"%str(endtime - begtime))
 	print("############################################")
 	begtime = datetime.datetime.now()
-	links2 = getLinksBS(page_content);
+	links2 = getLinksBS(url, page_content);
 	endtime = datetime.datetime.now()
 	print("BQ use time: %s"%str(endtime - begtime))
 	Only2 = 0
@@ -164,6 +202,31 @@ def getLinksTestDiff(page_content):
 			Only1 += 1
 	print("Got URL NUM %d:%d Only:%d:%d"%(len(links1),len(links2), Only1, Only2))
 	return links2
+# browse the url and click width+random urls and depth in the every url.    
+def browseUrl(url, width, depth):
+	logging.getLogger('http').debug("------------------------------------------------------")
+	logging.getLogger('http').debug("config.blacklist: %s" % config.blacklist )
+	logging.getLogger('http').debug("Request URL:%s width %d depth %d"%(url, width, depth))
+	page = doRequest(url)  # hit current root URL
+	if depth <= 0 : return
+	if width <= 0 : return
+	if page:
+		links = getLinks(url, page.content) # extract links from page
+		linkCount = len(links)
+	else:
+		logging.getLogger('http').error("Error requesting %s" % url)
+		return
+		
+	linkCount = len(links)
+	if linkCount < width:
+		realWidth = linkCount
+	else:
+		realWidth = width
+	for i in range(1, realWidth):
+		clickLink = random.choice(tuple(links))
+		logging.getLogger('http').debug("Choosing random link [%s] from total: %d" % (clickLink, linkCount))
+		browseUrl(clickLink, width, depth-1)
+
 	
 def browse(urls):
 	currURL = 1
@@ -171,94 +234,19 @@ def browse(urls):
 		urlCount = len(urls)
 
 		print("Request root URL:%s"%url)
-		page = doRequest(url)  # hit current root URL
-		if page:
-			links = getLinks(page.content) # extract links from page
-			linkCount = len(links)
-		else:
-			if config.debug:
-				print("Error requesting %s" % url)
-			continue
+		browseUrl(url,config.clickWidth, config.clickDepth)  # hit current root URL
 			
-			
-		depth=0
-		while ( depth < config.clickDepth ):
-			if config.debug:
-				print("------------------------------------------------------")
-				print("config.blacklist: %s" % config.blacklist )
-			# set the link count, which will change throughout the loop
-			linkCount = len(links)
-			if ( linkCount > 1): # make sure we have more than 1 link to use
-			
-				if config.debug:
-					print("URL: %s / %s -- Depth: %s / %s" \
-						% (currURL,urlCount,depth,config.clickDepth))
-					print("Choosing random link from total: %s" % linkCount)
-					
-				randomLink = random.randrange(0,linkCount - 1)
-				
-				if config.debug:
-					print("Link chosen: %s of %s" % (randomLink,linkCount))
-					
-				clickLink = links[randomLink]
-				
-				try:
-					# browse to random link on rootURL
-					sub_page = doRequest(clickLink)
-					if sub_page:
-						checkLinkCount = len(getLinks(sub_page.content))
-					else:
-						if config.debug:
-							print("Error requesting %s" % url)
-						break
-					
-					
-					checkLinkCount = len(getLinks(sub_page.content))
-
-					# make sure we have more than 1 link to pick from 
-					if ( checkLinkCount > 1 ):
-						# extract links from the new page
-						links = getLinks(sub_page.content)
-					else:
-						# else retry with current link list
-						if config.debug:
-							print("Not enough links found! Found: %s  -- " \
-								"Going back up a level" % checkLinkCount)
-						config.blacklist.insert(0,clickLink)
-						# remove the dead-end link from our list
-						del links[randomLink]
-				except:
-					if config.debug:
-						print("Exception on URL: %s	 -- " \
-							"removing from list and trying again!" % clickLink)
-					# I need to expand more on exception type for config.debugging
-					config.blacklist.insert(0,clickLink)
-					# remove the dead-end link from our list
-					del links[randomLink] 
-					pass
-				# increment counter whether request was successful or not 
-				# so that we don't end up in an infinite failed request loop
-				depth+=1
-			else:
-				# we land here if we went down a path that dead-ends
-				# could implement logic to simply restart at same root
-				if config.debug:
-					print("Hit a dead end...Moving to next Root URL")
-				config.blacklist.insert(0,url)
-				depth = config.clickDepth 
-			
-		
-		currURL+=1 # increase rootURL iteration
 	if config.debug:
 		print("Done.")
+
 
 # initialize our global variables
 dataMeter = 0
 goodRequests = 0
 badRequests = 0
 
-while True:
-#if True:
+#while True:
+if True:
 	#test_geturl_re()
 	#exit()
 	print("Traffic generator started...")
