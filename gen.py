@@ -9,6 +9,7 @@
 #20170714 shyft ADDED python 2.7 and 3.x compatibility and generic config
 from __future__ import print_function 
 import requests, re, time, random 
+import logging
 try:
 	import config
 except ImportError:
@@ -49,9 +50,15 @@ def doRequest(url):
 	headers = {'user-agent': config.userAgent}
 	
 	try:
-		r = requests.get(url, headers=headers, timeout=5)
 	except:
-		time.sleep(30) # else we'll enter 100% CPU loop in a net down situation
+		r = requests.get(url, headers=headers, timeout=15)
+	except requests.exceptions.RequestException as e:
+		logging.getLogger("http").error('HTTPError[%s] to [%s]'%(str(e), url))
+		return False
+	except :
+		import traceback
+		logging.getLogger("http").error('Http 2[%s] generic exception: %s'%(url, traceback.format_exc()))
+#		time.sleep(30) # else we'll enter 100% CPU loop in a net down situation
 		return False
 		
 	status = r.status_code
@@ -86,30 +93,87 @@ def doRequest(url):
 		
 	time.sleep(sleepTime)
 	return r
+from BeautifulSoup import BeautifulSoup, SoupStrainer
 
-def getLinks(page):
-	links=[]
+test_str = """<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=3232"><span class="txt">apple<sup class="c"></sup></span></a></li>
+<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=49"><span class="txt">arts<sup class="c"></sup></span></a></li>
+<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=575"><span class="txt">haiku<sup class="c"></sup></span></a></li>"""
+test_str1 = '<a class="channel__subnav__nav-item" href="/channel/longreads">'
+test_str2 = '		   <a href="http://accounts.craigslist.org/login/home">account</a>'
+test_str3 = '<a href=" https://www.ebay.com/rpp/gift-cards" _sp="m570.l6463" class="gh-p"> Gift Cards</a>'
 
-	pattern=r"(?:href\=\")(https?:\/\/[^\"]+)(?:\")"
-	
-	matches = re.findall(pattern,str(page.content))
+
+def test_geturl_re():
+	getLinks(test_str)
+	getLinks(test_str2)
+	getLinks(test_str3)
+from HTMLParser import HTMLParser
+def getLinksRe(page_content):
+	links1=set()
+	links2=set()
+
+	#pattern=r"(?:href\=\")(https?:\/\/[^\"]+)(?:\")"
+	pattern=r"(?:href\=\")(https?:\/\/[^\"]+|(?:\/?\/)[^\"]+|(?:\?)[^\"]+)(?:\")"
+	#print(page_content)
+	matches = re.findall(pattern,str(page_content))
 	
 	for match in matches: # check all matches against config.blacklist
 		if any(bl in match for bl in config.blacklist):
 			pass
 		else:
-			links.insert(0,match)
-		
-	return links
+			h = HTMLParser()
+			match = h.unescape(match)
 
+			#print("URL1:%s"%str(match))
+			links1.add(match)
+	return links1
+	
+def getLinksBS(page_content):
+	links2=set()
+
+	for link in BeautifulSoup(page_content).findAll('a', href=True): #, parseOnlyThese=SoupStrainer('a')):
+		#print("link:"+str(link))
+		if link.get('href') == '#': continue
+		if link.get('href').startswith('javascript'): continue
+		#print("URL2:"+link.get('href'))
+		links2.add(link.get('href'))
+	return links2
+import datetime
+def getLinks(page_content):
+	return getLinksRe(page_content)
+def getLinksTestDiff(page_content):
+	begtime = datetime.datetime.now()
+	links1 = getLinksRe(page_content)
+	endtime = datetime.datetime.now()
+	print("Re use time: %s"%str(endtime - begtime))
+	print("############################################")
+	begtime = datetime.datetime.now()
+	links2 = getLinksBS(page_content);
+	endtime = datetime.datetime.now()
+	print("BQ use time: %s"%str(endtime - begtime))
+	Only2 = 0
+	for link in links2:
+		if (link not in links1):
+			print("Only2:"+link)
+			Only2 += 1
+	print("#############")
+	Only1 = 0
+	for link in links1:
+		if link not in links2:
+			print("Only1:"+ link)
+			Only1 += 1
+	print("Got URL NUM %d:%d Only:%d:%d"%(len(links1),len(links2), Only1, Only2))
+	return links2
+	
 def browse(urls):
 	currURL = 1
 	for url in urls:
 		urlCount = len(urls)
 
+		print("Request root URL:%s"%url)
 		page = doRequest(url)  # hit current root URL
 		if page:
-			links = getLinks(page) # extract links from page
+			links = getLinks(page.content) # extract links from page
 			linkCount = len(links)
 		else:
 			if config.debug:
@@ -142,19 +206,19 @@ def browse(urls):
 					# browse to random link on rootURL
 					sub_page = doRequest(clickLink)
 					if sub_page:
-						checkLinkCount = len(getLinks(sub_page))
+						checkLinkCount = len(getLinks(sub_page.content))
 					else:
 						if config.debug:
 							print("Error requesting %s" % url)
 						break
 					
 					
-					checkLinkCount = len(getLinks(sub_page))
+					checkLinkCount = len(getLinks(sub_page.content))
 
 					# make sure we have more than 1 link to pick from 
 					if ( checkLinkCount > 1 ):
 						# extract links from the new page
-						links = getLinks(sub_page)
+						links = getLinks(sub_page.content)
 					else:
 						# else retry with current link list
 						if config.debug:
@@ -165,7 +229,7 @@ def browse(urls):
 						del links[randomLink]
 				except:
 					if config.debug:
-						print("Exception on URL: %s  -- " \
+						print("Exception on URL: %s	 -- " \
 							"removing from list and trying again!" % clickLink)
 					# I need to expand more on exception type for config.debugging
 					config.blacklist.insert(0,clickLink)
@@ -180,7 +244,7 @@ def browse(urls):
 				# could implement logic to simply restart at same root
 				if config.debug:
 					print("Hit a dead end...Moving to next Root URL")
-				config.blacklist.insert(0,clickLink)
+				config.blacklist.insert(0,url)
 				depth = config.clickDepth 
 			
 		
@@ -194,6 +258,9 @@ goodRequests = 0
 badRequests = 0
 
 while True:
+#if True:
+	#test_geturl_re()
+	#exit()
 	print("Traffic generator started...")
 	print("----------------------------")
 	print("https://github.com/ecapuano/web-traffic-generator")
@@ -204,4 +271,16 @@ while True:
 		% (config.minWait,config.maxWait))
 	print("")
 	print("This script will run indefinitely. Ctrl+C to stop.")
+	logging.basicConfig(level = logging.DEBUG,
+						format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+						datefmt = '%Y-%m-%d %H:%M:%S',
+						filename = "log.txt")
+	ch = logging.StreamHandler()
+	ch.setLevel(logging.DEBUG)
+	# create formatter and add it to the handlers
+	formatter = logging.Formatter('%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
+	ch.setFormatter(formatter)
+	# add the handlers to logger
+	logging.getLogger('main').addHandler(ch)
+	logging.getLogger('http').addHandler(ch)
 	browse(config.rootURLs)
