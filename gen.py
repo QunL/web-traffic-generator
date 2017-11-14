@@ -10,9 +10,6 @@
 from __future__ import print_function 
 import requests, re, time, random 
 import logging
-from HTMLParser import HTMLParser
-import datetime
-
 try:
 	import config
 except ImportError:
@@ -40,18 +37,87 @@ except ImportError:
 		userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_3) ' \
 			'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36'
 	config = ConfigClass 
+def doRequest(url):
+	global dataMeter
+	global goodRequests
+	global badRequests
+	sleepTime = random.randrange(config.minWait,config.maxWait)
+	
+	if config.debug:
+		print("requesting: %s" % url)
+	
+	headers = {'user-agent': config.userAgent}
+	
+	try:
+		r = requests.get(url, headers=headers, timeout=15)
+	except requests.exceptions.RequestException as e:
+		logging.getLogger("http").error('HTTPError[%s] to [%s]'%(str(e), url))
+		return False
+	except :
+		import traceback
+		logging.getLogger("http").error('Http 2[%s] generic exception: %s'%(url, traceback.format_exc()))
+#		time.sleep(30) # else we'll enter 100% CPU loop in a net down situation
+		return False
+		
+	status = r.status_code
+	
+	pageSize = len(r.content)
+	dataMeter = dataMeter + pageSize
+
+	
+	if config.debug:
+		print("Page size: %s" % pageSize)
+		if ( dataMeter > 1000000 ):
+			print("Data meter: %s MB" % (dataMeter / 1000000))
+		else:
+			print("Data meter: %s bytes" % dataMeter)
+	
+	if ( status != 200 ):
+		badRequests+=1
+		if config.debug:
+			print("Response status: %s" % r.status_code)
+		if ( status == 429 ):
+			if config.debug:
+				print("We're making requests too frequently... sleeping longer...")
+			sleepTime+=30
+	else:
+		goodRequests+=1
+	
+	# need to sleep for random number of seconds!
+	if config.debug:
+		print("Good requests: %s" % goodRequests)
+		print("Bad reqeusts: %s" % badRequests)
+		print("Sleeping for %s seconds..." % sleepTime)
+		
+	time.sleep(sleepTime)
+	return r
+from BeautifulSoup import BeautifulSoup, SoupStrainer
+
+test_str = """<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=3232"><span class="txt">apple<sup class="c"></sup></span></a></li>
+<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=49"><span class="txt">arts<sup class="c"></sup></span></a></li>
+<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=575"><span class="txt">haiku<sup class="c"></sup></span></a></li>"""
+test_str1 = '<a class="channel__subnav__nav-item" href="/channel/longreads">'
+test_str2 = '		   <a href="http://accounts.craigslist.org/login/home">account</a>'
+test_str3 = '<a href=" https://www.ebay.com/rpp/gift-cards" _sp="m570.l6463" class="gh-p"> Gift Cards</a>'
+
+
+def test_geturl_re():
+	getLinks('abc.com', test_str)
+	getLinks('abc.com', test_str2)
+	getLinks('abc.com', test_str3)
+	
 def remedyUrl(url, newUrl):
 	#print("bef:"+newUrl)
 	if newUrl.startswith('//'):
 		hbeg = url.find('//')
 		if  hbeg == -1:
-			logging.getLogger(self._logEntity).error('getLinksRe cannot find // in page[%s] with new ULR [%s]' % (url, newUrl))
+			logging.getLogger("http").error('getLinksRe cannot find // in page[%s] with new ULR [%s]' % (url, newUrl))
 			return ''
 		newUrl = url[0:hbeg]+newUrl
 	elif newUrl.startswith('/'):
 		hbeg = url.find('//')
 		if  hbeg == -1:
-			logging.getLogger(self._logEntity).error('getLinksRe cannot find // in page[%s] with new ULR [%s]' % (url, newUrl))
+			logging.getLogger("http").error('getLinksRe cannot find // in page[%s] with new ULR [%s]' % (url, newUrl))
 			return ''
 		pbeg = url.find('/', hbeg+2)
 		if  pbeg == -1:
@@ -70,115 +136,37 @@ def testRemedyUrl():
 	assert(remedyUrl("https://abc.com/", "/cdf.com/a?b") == "https://abc.com/cdf.com/a?b")
 	assert(remedyUrl("https://abc.com/a.html", "?cdf/a?b") == "https://abc.com/a.html?cdf/a?b")
 	assert(remedyUrl("https://abc.com", "http://cdf.com/a?b") == "http://cdf.com/a?b")
-class surf_web():
-	def __init__(self):
-		self._dataMeter = 0
-		self._goodRequests = 0
-		self._badRequests = 0
-		self._minWait = 3
-		self._maxWait = 15
-		self._userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_3) ' \
-			'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36'
-		self._urlTimeout = 15
-		self._logEntity = "http"
-		self._blacklist = []
-		self._width = 5
-		self._depth = 5
-		pass
 
-	def doRequest(self, url):
-		sleepTime = random.randrange(config.minWait,config.maxWait)
-		headers = {'user-agent': config.userAgent}
-		try:
-			r = requests.get(url, headers=headers, timeout=self._urlTimeout)
-		except requests.exceptions.RequestException as e:
-			logging.getLogger(self._logEntity).error('HTTPError[%s] to [%s]'%(str(e), url))
-			return False
-		except :
-			import traceback
-			logging.getLogger(self._logEntity).error('Http 2[%s] exception: %s'%(url, traceback.format_exc()))
-			return False
-			
-		status = r.status_code
-		pageSize = len(r.content)
-		logging.getLogger(self._logEntity).debug("doRequest[%s]status[%s]len[%d]" % (url, status, pageSize))
-		self._dataMeter = self._dataMeter + pageSize
-		if ( status != 200 ):
-			self._badRequests+=1
-			logging.getLogger(self._logEntity).info("Response status[%s]for[%s]" % (r.status_code, url))
-		else:
-			self._goodRequests+=1
-			
-		time.sleep(sleepTime)
-		return r
+from HTMLParser import HTMLParser
+def getLinksRe(url, page_content):
+	links1=set()
+	links2=set()
 
-	def getLinksRe(self, url, page_content):
-		links1=set()
-		links2=set()
-
-		#pattern=r"(?:href\=\")(https?:\/\/[^\"]+)(?:\")"
-		pattern=r"(?:href\=\")(https?:\/\/[^\"]+|(?:\/?\/)[^\"]+|(?:\?)[^\"]+)(?:\")"
-		#print(page_content)
-		matches = re.findall(pattern,str(page_content))
-		
-		for match in matches: # check all matches against config.blacklist
-			if any(bl in match for bl in self._blacklist):
-				pass
-			else:
-				try:
-					h = HTMLParser()
-					match = h.unescape(match)
-				except:
-					import traceback
-					logging.getLogger(self._logEntity).error('HTMLParser.unescape 2[%s] exception: %s'%(url, traceback.format_exc()))
-					continue
-
-				#print("URL1:%s"%str(match))
-				match = remedyUrl(url, match)
-				if match == '':
-					continue
-				links1.add(match)
-		return links1
+	#pattern=r"(?:href\=\")(https?:\/\/[^\"]+)(?:\")"
+	pattern=r"(?:href\=\")(https?:\/\/[^\"]+|(?:\/?\/)[^\"]+|(?:\?)[^\"]+)(?:\")"
+	#print(page_content)
+	matches = re.findall(pattern,str(page_content))
 	
-	def getLinks(self, url, page_content):
-		return self.getLinksRe(url, page_content)
-	# browse the url and click width+random urls and depth in the every url.    
-	def _browseUrl(self, url, width, depth):
-		logging.getLogger(self._logEntity).debug("_browseUrl:%s width %d depth %d"%(url, width, depth))
-		page = self.doRequest(url)  # hit current root URL
-		if depth <= 0 : return
-		if width <= 0 : return
-		if page:
-			links = self.getLinks(url, page.content) # extract links from page
-			linkCount = len(links)
+	for match in matches: # check all matches against config.blacklist
+		if any(bl in match for bl in config.blacklist):
+			pass
 		else:
-			logging.getLogger(self._logEntity).error("Error requesting %s" % url)
-			return
-			
-		linkCount = len(links)
-		if linkCount < width:
-			realWidth = linkCount
-		else:
-			realWidth = width
-		for i in range(1, realWidth):
-			clickLink = random.choice(tuple(links))
-			logging.getLogger(self._logEntity).debug("Random[%d/%d]get[%s]in[%s]:%d" % (i, realWidth, clickLink, url, linkCount))
-			self._browseUrl(clickLink, width, depth-1)
-	def browseUrl(self, url):
-		self._browseUrl(url, self._width, self._depth)
-def test_geturl_re():
-	test_str = """<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=3232"><span class="txt">apple<sup class="c"></sup></span></a></li>
-	<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=49"><span class="txt">arts<sup class="c"></sup></span></a></li>
-	<li><a href="https://forums.craigslist.org/?areaID=15&amp;forumID=575"><span class="txt">haiku<sup class="c"></sup></span></a></li>"""
-	test_str1 = '<a class="channel__subnav__nav-item" href="/channel/longreads">'
-	test_str2 = '		   <a href="http://accounts.craigslist.org/login/home">account</a>'
-	test_str3 = '<a href=" https://www.ebay.com/rpp/gift-cards" _sp="m570.l6463" class="gh-p"> Gift Cards</a>'
-	sw = surf_web()
-	sw.getLinks('abc.com', test_str)
-	sw.getLinks('abc.com', test_str2)
-	sw.getLinks('abc.com', test_str3)
+			try:
+				h = HTMLParser()
+				match = h.unescape(match)
+			except:
+				import traceback
+				logging.getLogger("http").error('Http 2[%s] generic exception: %s'%(url, traceback.format_exc()))
+				continue
+
+			#print("URL1:%s"%str(match))
+			match = remedyUrl(url, match)
+			if match == '':
+				continue
+			links1.add(match)
+	return links1
+	
 def getLinksBS(url, page_content):
-	from BeautifulSoup import BeautifulSoup, SoupStrainer
 	links2=set()
 
 	for link in BeautifulSoup(page_content).findAll('a', href=True): #, parseOnlyThese=SoupStrainer('a')):
@@ -186,20 +174,19 @@ def getLinksBS(url, page_content):
 		if link.get('href') == '#': continue
 		if link.get('href').startswith('javascript'): continue
 		#print("URL2:"+link.get('href'))
-		links2.add(remedyUrl(url, link.get('href')))
+		links2.add(link.get('href'))
 	return links2
-
-def getLinksTestDiff(url):
-	sw = surf_web()
-	page = sw.doRequest(url)  # hit current root URL
+import datetime
+def getLinks(url, page_content):
+	return getLinksRe(url, page_content)
+def getLinksTestDiff(url, page_content):
 	begtime = datetime.datetime.now()
-	sw = surf_web()
-	links1 = sw.getLinksRe(url, page.content)
+	links1 = getLinksRe(url, page_content)
 	endtime = datetime.datetime.now()
 	print("Re use time: %s"%str(endtime - begtime))
 	print("############################################")
 	begtime = datetime.datetime.now()
-	links2 = getLinksBS(url, page.content);
+	links2 = getLinksBS(url, page_content);
 	endtime = datetime.datetime.now()
 	print("BQ use time: %s"%str(endtime - begtime))
 	Only2 = 0
@@ -215,37 +202,53 @@ def getLinksTestDiff(url):
 			Only1 += 1
 	print("Got URL NUM %d:%d Only:%d:%d"%(len(links1),len(links2), Only1, Only2))
 	return links2
+# browse the url and click width+random urls and depth in the every url.    
+def browseUrl(url, width, depth):
+	logging.getLogger('http').debug("------------------------------------------------------")
+	logging.getLogger('http').debug("config.blacklist: %s" % config.blacklist )
+	logging.getLogger('http').debug("Request URL:%s width %d depth %d"%(url, width, depth))
+	page = doRequest(url)  # hit current root URL
+	if depth <= 0 : return
+	if width <= 0 : return
+	if page:
+		links = getLinks(url, page.content) # extract links from page
+		linkCount = len(links)
+	else:
+		logging.getLogger('http').error("Error requesting %s" % url)
+		return
+		
+	linkCount = len(links)
+	if linkCount < width:
+		realWidth = linkCount
+	else:
+		realWidth = width
+	for i in range(1, realWidth):
+		clickLink = random.choice(tuple(links))
+		logging.getLogger('http').debug("Choosing random link [%s] from total: %d" % (clickLink, linkCount))
+		browseUrl(clickLink, width, depth-1)
+
 	
 def browse(urls):
 	currURL = 1
-	sw = surf_web()
-	sw._maxWait = config.maxWait
-	sw._minWait = config.minWait
-	sw._blacklist = config.blacklist
-	sw._depth = config.clickDepth
-	sw._width = config.clickWidth
 	for url in urls:
 		urlCount = len(urls)
 
-		logging.getLogger('main').debug("Request root URL:%s"%url)
-		sw.browseUrl(url)  # hit current root URL
-		if config.debug:
-			if ( sw._dataMeter > 1000000 ):
-				print("Data meter: %s MB" % (sw._dataMeter / 1000000))
-			else:
-				print("Data meter: %s bytes" % sw._dataMeter)
-			print("Good requests: %s" % sw._goodRequests)
-			print("Bad reqeusts: %s" % sw._badRequests)
+		print("Request root URL:%s"%url)
+		browseUrl(url,config.clickWidth, config.clickDepth)  # hit current root URL
 			
-	logging.getLogger('main').debug("Done.")
+	if config.debug:
+		print("Done.")
+
+
+# initialize our global variables
+dataMeter = 0
+goodRequests = 0
+badRequests = 0
 
 #while True:
 if True:
-	'''testRemedyUrl()
-	test_geturl_re()
-	getLinksTestDiff("https://digg.com")
-	getLinksTestDiff("https://cnn.com")
-	exit() '''
+	#test_geturl_re()
+	#exit()
 	print("Traffic generator started...")
 	print("----------------------------")
 	print("https://github.com/ecapuano/web-traffic-generator")
@@ -257,13 +260,13 @@ if True:
 	print("")
 	print("This script will run indefinitely. Ctrl+C to stop.")
 	logging.basicConfig(level = logging.DEBUG,
-						format = '%(asctime)s %(name)-8s %(levelname)-6s %(message)s',
+						format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
 						datefmt = '%Y-%m-%d %H:%M:%S',
 						filename = "log.txt")
 	ch = logging.StreamHandler()
 	ch.setLevel(logging.DEBUG)
 	# create formatter and add it to the handlers
-	formatter = logging.Formatter('%(asctime)s %(name)-8s %(levelname)-6s %(message)s')
+	formatter = logging.Formatter('%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
 	ch.setFormatter(formatter)
 	# add the handlers to logger
 	logging.getLogger('main').addHandler(ch)
