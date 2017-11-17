@@ -42,11 +42,11 @@ except ImportError:
 def browse(urls):
 	currURL = 1
 	sw = SurfWeb()
-	sw._maxWait = config.maxWait
-	sw._minWait = config.minWait
-	sw._blacklist = config.blacklist
-	sw._depth = config.clickDepth
-	sw._width = config.clickWidth
+	sw.max_wait = config.maxWait
+	sw.min_wait = config.minWait
+	sw.black_list = config.blacklist
+	sw.depth = config.clickDepth
+	sw.width = config.clickWidth
 	for url in urls:
 		urlCount = len(urls)
 

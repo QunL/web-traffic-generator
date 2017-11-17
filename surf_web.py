@@ -16,7 +16,7 @@ import random
 import datetime
 import logging
 import HTMLParser
-import requests
+import urllib2
 
 LOG_ENTITY = 'surfweb'
 def remedy_url(url, new_url):
@@ -67,9 +67,9 @@ class SurfWeb(object):
         self.data_meter = 0
         self.good_requests = 0
         self.bad_requests = 0
-        self.min_wait = 3
-        self.max_wait = 15
-        self.user_agant = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_3) '\
+        self.min_wait = 1
+        self.max_wait = 5
+        self.user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_3) '\
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 '\
             'Safari/537.36'
         self.url_timeout = 1
@@ -77,32 +77,41 @@ class SurfWeb(object):
         self.black_list = []
         self.width = 2
         self.depth = 2
+        self.url_opener = urllib2.build_opener()
+        self.url_opener.addheaders = [('User-agent', self.user_agent)]
 
     def do_request(self, url):
         ''' The func request the url, return the request.response.'''
         sleep_time = random.randrange(self.min_wait, self.max_wait)
-        headers = {'user-agent': self.user_agant}
         try:
-            req = requests.get(url, headers=headers, timeout=self.url_timeout)
-        except requests.exceptions.RequestException as exp:
+            req = self.url_opener.open(url, timeout=self.url_timeout)
+            page_content = req.read()
+            status = req.getcode()
+            page_size = len(page_content)
+        except urllib2.HTTPError, exp:
             logging.getLogger(self.log_entity).error('HTTPError[%s] to [%s]',
-                                                     str(exp), url)
-            return False
-
-        status = req.status_code
-        page_size = len(req.content)
+                str(exp.code) + str(exp.reason), url)
+            return ''
+        except urllib2.URLError, exp:
+            logging.getLogger(self.log_entity).error(
+                'HTTPURLError [%s] to [%s]', str(exp.reason), url)
+            return ''
+        except Exception:
+            import traceback
+            logging.getLogger(self.log_entity).error('Exception: ' + traceback.format_exc())
+            return ''
         logging.getLogger(self.log_entity).debug(
             "do_request[%s]status[%s]len[%d]", url, status, page_size)
         self.data_meter = self.data_meter + page_size
         if status != 200:
             self.bad_requests += 1
             logging.getLogger(self.log_entity).info(
-                "Response status[%s]for[%s]", req.status_code, url)
+                "Response status[%s]for[%s]", status, url)
         else:
             self.good_requests += 1
 
         time.sleep(sleep_time)
-        return req
+        return page_content
 
     def get_links_re(self, url, page_content):
         ''' The func return the link list in page_content from url by re.'''
@@ -143,13 +152,13 @@ class SurfWeb(object):
         following the link for depth.'''
         logging.getLogger(self.log_entity).debug(
             "browse_url_wd:%s width %d depth %d", url, width, depth)
-        page = self.do_request(url)  # hit current root URL
+        page_content = self.do_request(url)  # hit current root URL
         if depth <= 0:
             return
         if width <= 0:
             return
-        if page:
-            links = self.get_links(url, page.content)
+        if page_content:
+            links = self.get_links(url, page_content)
             link_count = len(links)
         else:
             logging.getLogger(self.log_entity).error(
@@ -210,15 +219,15 @@ def get_links_bs(url, page_content):
 def test_get_links_diff(url):
     '''Test func different get_links re with bs'''
     surf_web = SurfWeb()
-    page = surf_web.do_request(url)  # hit current root URL
+    page_content = surf_web.do_request(url)  # hit current root URL
     begtime = datetime.datetime.now()
     surf_web = SurfWeb()
-    links1 = surf_web.get_links_re(url, page.content)
+    links1 = surf_web.get_links_re(url, page_content)
     endtime = datetime.datetime.now()
     print("Re use time: %s"%str(endtime - begtime))
     print("############################################")
     begtime = datetime.datetime.now()
-    links2 = get_links_bs(url, page.content)
+    links2 = get_links_bs(url, page_content)
     endtime = datetime.datetime.now()
     print("BQ use time: %s"%str(endtime - begtime))
     only2 = 0
@@ -237,10 +246,10 @@ def test_get_links_diff(url):
 
 # For test.
 if __name__ == "__main__":
-    logging.basicConfig(level = logging.DEBUG,
-                        format = '%(asctime)s %(name)-8s %(levelname)-6s %(message)s',
-                        datefmt = '%Y-%m-%d %H:%M:%S',
-                        filename = "log.txt")
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s %(name)-8s %(levelname)-6s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        filename="log.txt")
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
     # create formatter and add it to the handlers
@@ -248,7 +257,7 @@ if __name__ == "__main__":
     ch.setFormatter(formatter)
     # add the handlers to logger
     logging.getLogger(LOG_ENTITY).addHandler(ch)
-    
+
     test_remedy_url()
     test_geturl_re()
     test_get_links_diff("https://digg.com")
