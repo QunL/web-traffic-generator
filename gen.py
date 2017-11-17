@@ -9,7 +9,7 @@
 #20170714 shyft ADDED python 2.7 and 3.x compatibility and generic config
 from __future__ import print_function 
 import logging
-from surf_web import SurfWeb
+from surfweb import SurfWeb
 
 try:
 	import config
